@@ -16,8 +16,8 @@
     header { z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; background: linear-gradient(#08111d 75%, transparent); }
     h1 { margin: 0; font-size: 18px; font-weight: 700; }
     #time { color: #c7d7e8; font-size: 13px; text-align: right; }
-    #stage { min-height: 0; display: grid; place-items: center; position: relative; }
-    #radar { display: block; width: 100%; height: 100%; object-fit: contain; }
+    #stage { min-height: 0; display: grid; place-items: center; position: relative; overflow: hidden; touch-action: none; }
+    #radar { display: block; width: 100%; height: 100%; object-fit: contain; transform: translate3d(var(--pan-x, 0px), var(--pan-y, 0px), 0) scale(var(--zoom, 1)); transform-origin: center; will-change: transform; }
     #message { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; text-align: center; color: #c7d7e8; line-height: 1.45; }
     .hidden { display: none !important; }
     footer { z-index: 2; padding: 12px 16px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(transparent, #08111d 28%); }
@@ -26,6 +26,8 @@
     button { min-height: 48px; border: 0; border-radius: 12px; color: #f8fbff; background: #1c334d; font: inherit; font-size: 16px; font-weight: 650; touch-action: manipulation; }
     button:active { background: #2d5680; transform: scale(.98); }
     #refresh { background: #0d6ebd; }
+    #reset { min-height: 38px; padding: 0 12px; border-radius: 10px; background: #1c334d; font-size: 14px; }
+    #reset:disabled { opacity: .42; }
     @media (orientation: landscape) {
       main { grid-template-columns: minmax(140px, 22vw) 1fr; grid-template-rows: 1fr; }
       header { grid-column: 1; grid-row: 1; align-items: flex-start; flex-direction: column; justify-content: flex-start; background: #08111d; }
@@ -39,7 +41,7 @@
 </head>
 <body>
   <main>
-    <header><h1>Hungary radar</h1><div id="time">Loading radar…</div></header>
+    <header><h1>Hungary radar</h1><div id="time">Loading radar…</div><button id="reset" disabled>Reset map</button></header>
     <section id="stage"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="message">Finding the newest HungaroMet radar image…</div></section>
     <footer>
       <input id="scrubber" type="range" min="0" max="0" value="0" aria-label="Radar time">
@@ -60,9 +62,17 @@
     const message = document.querySelector('#message');
     const scrubber = document.querySelector('#scrubber');
     const playButton = document.querySelector('#play');
+    const stage = document.querySelector('#stage');
+    const resetButton = document.querySelector('#reset');
     let frames = [];
     let current = 0;
     let timer = null;
+    let zoom = 1;
+    let panX = 0;
+    let panY = 0;
+    const pointers = new Map();
+    let dragStart = null;
+    let pinchStart = null;
 
     function filename(date) {
       const yyyy = date.getUTCFullYear();
@@ -119,6 +129,67 @@
       scrubber.value = String(current);
     }
 
+    function setMapTransform() {
+      radar.style.setProperty('--zoom', zoom);
+      radar.style.setProperty('--pan-x', `${panX}px`);
+      radar.style.setProperty('--pan-y', `${panY}px`);
+      resetButton.disabled = zoom === 1 && panX === 0 && panY === 0;
+    }
+
+    function resetMap() {
+      zoom = 1;
+      panX = 0;
+      panY = 0;
+      setMapTransform();
+    }
+
+    function pointerDistance() {
+      const [first, second] = [...pointers.values()];
+      return Math.hypot(first.x - second.x, first.y - second.y);
+    }
+
+    function beginSinglePointer() {
+      const point = pointers.values().next().value;
+      dragStart = { x: point.x, y: point.y, panX, panY };
+      pinchStart = null;
+    }
+
+    stage.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      event.preventDefault();
+      stage.setPointerCapture(event.pointerId);
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pointers.size === 1) beginSinglePointer();
+      if (pointers.size === 2) {
+        pinchStart = { distance: pointerDistance(), zoom, panX, panY };
+        dragStart = null;
+      }
+    });
+
+    stage.addEventListener('pointermove', event => {
+      if (!pointers.has(event.pointerId)) return;
+      event.preventDefault();
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pointers.size === 2 && pinchStart) {
+        zoom = Math.max(1, Math.min(4, pinchStart.zoom * pointerDistance() / pinchStart.distance));
+        if (zoom === 1) { panX = 0; panY = 0; }
+        setMapTransform();
+      } else if (pointers.size === 1 && dragStart && zoom > 1) {
+        const point = pointers.values().next().value;
+        panX = dragStart.panX + point.x - dragStart.x;
+        panY = dragStart.panY + point.y - dragStart.y;
+        setMapTransform();
+      }
+    });
+
+    function endPointer(event) {
+      pointers.delete(event.pointerId);
+      if (pointers.size === 1) beginSinglePointer();
+      if (pointers.size === 0) { dragStart = null; pinchStart = null; }
+    }
+    stage.addEventListener('pointerup', endPointer);
+    stage.addEventListener('pointercancel', endPointer);
+
     function stop() {
       if (timer) clearInterval(timer);
       timer = null;
@@ -139,6 +210,7 @@
     document.querySelector('#next').addEventListener('click', () => { stop(); show(current + 1); });
     playButton.addEventListener('click', togglePlay);
     document.querySelector('#refresh').addEventListener('click', loadFrames);
+    resetButton.addEventListener('click', resetMap);
     document.addEventListener('gesturestart', event => event.preventDefault());
     loadFrames();
   </script>
