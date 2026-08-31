@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#08111d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Radar</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; background: #08111d; }
+    body { touch-action: none; -webkit-user-select: none; user-select: none; }
+    main { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
+    header { z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; background: linear-gradient(#08111d 75%, transparent); }
+    h1 { margin: 0; font-size: 18px; font-weight: 700; }
+    #time { color: #c7d7e8; font-size: 13px; text-align: right; }
+    #stage { min-height: 0; display: grid; place-items: center; position: relative; }
+    #radar { display: block; width: 100%; height: 100%; object-fit: contain; }
+    #message { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; text-align: center; color: #c7d7e8; line-height: 1.45; }
+    .hidden { display: none !important; }
+    footer { z-index: 2; padding: 12px 16px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(transparent, #08111d 28%); }
+    #scrubber { width: 100%; height: 42px; margin: 0 0 10px; accent-color: #3ca7ff; touch-action: pan-x; }
+    .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+    button { min-height: 48px; border: 0; border-radius: 12px; color: #f8fbff; background: #1c334d; font: inherit; font-size: 16px; font-weight: 650; touch-action: manipulation; }
+    button:active { background: #2d5680; transform: scale(.98); }
+    #refresh { background: #0d6ebd; }
+    @media (orientation: landscape) {
+      main { grid-template-columns: minmax(140px, 22vw) 1fr; grid-template-rows: 1fr; }
+      header { grid-column: 1; grid-row: 1; align-items: flex-start; flex-direction: column; justify-content: flex-start; background: #08111d; }
+      #time { text-align: left; }
+      #stage { grid-column: 2; grid-row: 1; }
+      footer { grid-column: 1; grid-row: 1; align-self: end; padding-top: 0; background: #08111d; }
+      .controls { grid-template-columns: repeat(2, 1fr); }
+      #scrubber { height: 54px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Hungary radar</h1><div id="time">Loading radar…</div></header>
+    <section id="stage"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="message">Finding the newest HungaroMet radar image…</div></section>
+    <footer>
+      <input id="scrubber" type="range" min="0" max="0" value="0" aria-label="Radar time">
+      <div class="controls">
+        <button id="back" aria-label="Previous radar frame">‹</button>
+        <button id="play" aria-label="Play radar animation">Play</button>
+        <button id="next" aria-label="Next radar frame">›</button>
+        <button id="refresh">Refresh</button>
+      </div>
+    </footer>
+  </main>
+  <script>
+    const BASE = 'https://www.met.hu/img/RccV/';
+    const STEP = 5 * 60 * 1000;
+    const FRAME_COUNT = 42;
+    const radar = document.querySelector('#radar');
+    const time = document.querySelector('#time');
+    const message = document.querySelector('#message');
+    const scrubber = document.querySelector('#scrubber');
+    const playButton = document.querySelector('#play');
+    let frames = [];
+    let current = 0;
+    let timer = null;
+
+    function filename(date) {
+      const yyyy = date.getUTCFullYear();
+      const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(date.getUTCDate()).padStart(2, '0');
+      const hh = String(date.getUTCHours()).padStart(2, '0');
+      const min = String(date.getUTCMinutes()).padStart(2, '0');
+      return `RccV${yyyy}${mm}${dd}_${hh}${min}.jpg`;
+    }
+
+    function label(date) {
+      return new Intl.DateTimeFormat('hu-HU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Budapest' }).format(date);
+    }
+
+    function frameUrl(date) { return BASE + filename(date); }
+
+    function probe(date) {
+      return new Promise(resolve => {
+        const image = new Image();
+        const done = ok => resolve(ok ? { date, url: frameUrl(date) } : null);
+        image.onload = () => done(true);
+        image.onerror = () => done(false);
+        image.src = frameUrl(date);
+      });
+    }
+
+    async function loadFrames() {
+      stop();
+      radar.classList.add('hidden');
+      message.classList.remove('hidden');
+      message.textContent = 'Finding the newest HungaroMet radar image…';
+      const rounded = new Date(Math.floor(Date.now() / STEP) * STEP);
+      const candidates = Array.from({ length: FRAME_COUNT }, (_, i) => new Date(rounded - i * STEP));
+      const results = await Promise.all(candidates.map(probe));
+      frames = results.filter(Boolean).reverse();
+      if (!frames.length) {
+        message.textContent = 'No current radar image could be loaded. Check your connection and try Refresh.';
+        time.textContent = 'Unavailable';
+        return;
+      }
+      current = frames.length - 1;
+      scrubber.max = String(frames.length - 1);
+      show(current);
+      radar.classList.remove('hidden');
+      message.classList.add('hidden');
+    }
+
+    function show(index) {
+      if (!frames.length) return;
+      current = Math.max(0, Math.min(frames.length - 1, index));
+      radar.src = frames[current].url;
+      radar.alt = `Hungary precipitation radar, ${label(frames[current].date)}`;
+      time.textContent = label(frames[current].date);
+      scrubber.value = String(current);
+    }
+
+    function stop() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      playButton.textContent = 'Play';
+      playButton.setAttribute('aria-label', 'Play radar animation');
+    }
+
+    function togglePlay() {
+      if (timer) return stop();
+      if (!frames.length) return;
+      timer = setInterval(() => show((current + 1) % frames.length), 500);
+      playButton.textContent = 'Pause';
+      playButton.setAttribute('aria-label', 'Pause radar animation');
+    }
+
+    scrubber.addEventListener('input', () => { stop(); show(Number(scrubber.value)); });
+    document.querySelector('#back').addEventListener('click', () => { stop(); show(current - 1); });
+    document.querySelector('#next').addEventListener('click', () => { stop(); show(current + 1); });
+    playButton.addEventListener('click', togglePlay);
+    document.querySelector('#refresh').addEventListener('click', loadFrames);
+    document.addEventListener('gesturestart', event => event.preventDefault());
+    loadFrames();
+  </script>
+</body>
+</html>
