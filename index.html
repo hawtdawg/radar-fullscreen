@@ -22,6 +22,14 @@
     #radar { display: block; width: 100%; height: 100%; object-fit: contain; }
     #message { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; text-align: center; color: #c7d7e8; line-height: 1.45; }
     .hidden { display: none !important; }
+    #calibration { position: absolute; z-index: 3; top: 10px; left: 10px; right: 10px; max-width: 440px; margin: auto; padding: 12px; border: 1px solid #6a91b8; border-radius: 14px; background: #08111de8; box-shadow: 0 4px 18px #0009; color: #eaf5ff; text-align: center; pointer-events: auto; }
+    #calibration strong { display: block; margin-bottom: 4px; }
+    #calibration p { margin: 0 0 10px; color: #c7d7e8; font-size: 13px; line-height: 1.35; }
+    #calibration-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    #calibration-actions button { min-height: 42px; padding: 7px; font-size: 13px; }
+    #calibration-actions button.selected { background: #0d6ebd; outline: 2px solid #9bd5ff; }
+    #calibration-status { margin-top: 9px; color: #9bd5ff; font-size: 12px; line-height: 1.3; }
+    #calibration-clear { margin-top: 8px; min-height: 32px; padding: 4px 10px; background: #304861; font-size: 12px; }
     footer { z-index: 2; padding: 12px 16px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(transparent, #08111d 28%); }
     #timeline { position: relative; height: 64px; margin: 0 14px 10px; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; }
     #timeline::before, #timeline-fill { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 10px; transform: translateY(-50%); border-radius: 999px; }
@@ -49,7 +57,7 @@
 <body>
   <main>
     <header><h1>Hungary radar</h1><div id="time">Loading radar…</div></header>
-    <section id="stage"><div id="map-layer"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="location-marker" class="hidden" aria-label="Your location"></div></div><div id="message">Finding the newest HungaroMet radar image…</div></section>
+    <section id="stage"><div id="map-layer"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="location-marker" class="hidden" aria-label="Your location"></div></div><div id="message">Finding the newest HungaroMet radar image…</div><aside id="calibration" class="hidden" aria-live="polite"><strong>Map-position check</strong><p>Select a landmark, then tap its exact visible point. The map is temporarily shown fully zoomed out.</p><div id="calibration-actions"><button data-landmark="balaton">1. West end of Lake Balaton</button><button data-landmark="tisza">2. North end of Tisza-tó</button></div><div id="calibration-status">Choose the first landmark to begin.</div><button id="calibration-clear" class="hidden">Clear saved calibration</button></aside></section>
     <footer>
       <div id="timeline" role="slider" aria-label="Radar time" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" tabindex="0"><div id="timeline-fill"></div><div id="timeline-thumb"></div></div>
       <div class="controls">
@@ -70,6 +78,9 @@
     const timeline = document.querySelector('#timeline');
     const mapLayer = document.querySelector('#map-layer');
     const locationMarker = document.querySelector('#location-marker');
+    const calibrationPanel = document.querySelector('#calibration');
+    const calibrationStatus = document.querySelector('#calibration-status');
+    const calibrationClear = document.querySelector('#calibration-clear');
     const playButton = document.querySelector('#play');
     const stage = document.querySelector('#stage');
     let frames = [];
@@ -86,9 +97,30 @@
     let pinchStart = null;
     let timelinePointer = null;
     let currentLocation = null;
+    let calibrationTarget = null;
+    let calibrationTap = null;
+    const calibrationSamples = [];
+    const calibrationMode = new URLSearchParams(location.search).has('calibrate');
 
     const MAP_BOUNDS = { west: 13.5, east: 25.5, north: 50.5, south: 44.004 };
     const VIEWER_IMAGE_X_CORRECTION = 0.015;
+    const CALIBRATION_KEY = 'radar-map-calibration-v1';
+    // Points chosen on distinct, easily recognised ends of the two water bodies.
+    const LANDMARKS = {
+      balaton: { name: 'the west end of Lake Balaton', latitude: 46.705, longitude: 17.255 },
+      tisza: { name: 'the north end of Tisza-tó', latitude: 47.790, longitude: 20.745 }
+    };
+
+    function readCalibration() {
+      try { return JSON.parse(localStorage.getItem(CALIBRATION_KEY)); } catch { return null; }
+    }
+
+    function normalisedPosition(latitude, longitude) {
+      return {
+        x: (longitude - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west),
+        y: (MAP_BOUNDS.north - latitude) / (MAP_BOUNDS.north - MAP_BOUNDS.south)
+      };
+    }
 
     function filename(date) {
       const yyyy = date.getUTCFullYear();
@@ -177,6 +209,10 @@
       event.preventDefault();
       stage.setPointerCapture(event.pointerId);
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (calibrationTarget && pointers.size === 1) {
+        calibrationTap = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+        return;
+      }
       if (pointers.size === 1) beginSinglePointer();
       if (pointers.size === 2) {
         pinchStart = { distance: pointerDistance(), zoom, panX, panY };
@@ -201,6 +237,11 @@
     });
 
     function endPointer(event) {
+      if (calibrationTap && calibrationTap.pointerId === event.pointerId && calibrationTarget) {
+        const distance = Math.hypot(event.clientX - calibrationTap.x, event.clientY - calibrationTap.y);
+        if (distance < 12) recordCalibrationTap(event.clientX, event.clientY);
+        calibrationTap = null;
+      }
       pointers.delete(event.pointerId);
       if (pointers.size === 1) beginSinglePointer();
       if (pointers.size === 0) { dragStart = null; pinchStart = null; }
@@ -238,8 +279,10 @@
 
     function positionLocationMarker() {
       if (!currentLocation || !radar.naturalWidth) return;
-      const x = (currentLocation.longitude - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west) + VIEWER_IMAGE_X_CORRECTION;
-      const y = (MAP_BOUNDS.north - currentLocation.latitude) / (MAP_BOUNDS.north - MAP_BOUNDS.south);
+      const base = normalisedPosition(currentLocation.latitude, currentLocation.longitude);
+      const saved = readCalibration();
+      const x = saved ? base.x * saved.scaleX + saved.offsetX : base.x + VIEWER_IMAGE_X_CORRECTION;
+      const y = saved ? base.y * saved.scaleY + saved.offsetY : base.y;
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
       const stageRect = stage.getBoundingClientRect();
       const imageAspect = radar.naturalWidth / radar.naturalHeight;
@@ -250,6 +293,68 @@
       locationMarker.style.top = `${(stageRect.height - height) / 2 + y * height}px`;
       locationMarker.style.setProperty('--marker-scale', width / radar.naturalWidth);
       locationMarker.classList.remove('hidden');
+    }
+
+    function imagePointFromClient(clientX, clientY) {
+      if (!radar.naturalWidth) return null;
+      const stageRect = stage.getBoundingClientRect();
+      const imageAspect = radar.naturalWidth / radar.naturalHeight;
+      const stageAspect = stageRect.width / stageRect.height;
+      const width = stageAspect > imageAspect ? stageRect.height * imageAspect : stageRect.width;
+      const height = stageAspect > imageAspect ? stageRect.height : stageRect.width / imageAspect;
+      const left = stageRect.left + (stageRect.width - width) / 2;
+      const top = stageRect.top + (stageRect.height - height) / 2;
+      const x = (clientX - left) / width;
+      const y = (clientY - top) / height;
+      return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+    }
+
+    function selectCalibrationTarget(key) {
+      calibrationTarget = key;
+      calibrationTap = null;
+      zoom = MIN_ZOOM;
+      panX = 0;
+      panY = 0;
+      setMapTransform();
+      calibrationStatus.textContent = `Now tap ${LANDMARKS[key].name}.`;
+      document.querySelectorAll('[data-landmark]').forEach(button => button.classList.toggle('selected', button.dataset.landmark === key));
+    }
+
+    function recordCalibrationTap(clientX, clientY) {
+      const imagePoint = imagePointFromClient(clientX, clientY);
+      if (!imagePoint) {
+        calibrationStatus.textContent = 'Please tap within the radar image.';
+        return;
+      }
+      const landmark = LANDMARKS[calibrationTarget];
+      const expected = normalisedPosition(landmark.latitude, landmark.longitude);
+      const existingIndex = calibrationSamples.findIndex(sample => sample.key === calibrationTarget);
+      const sample = { key: calibrationTarget, expected, imagePoint };
+      if (existingIndex >= 0) calibrationSamples[existingIndex] = sample;
+      else calibrationSamples.push(sample);
+      calibrationTarget = null;
+      const done = calibrationSamples.length === 2;
+      calibrationStatus.textContent = done ? 'Both points captured — calculating…' : 'First point saved. Now select the other landmark.';
+      document.querySelectorAll('[data-landmark]').forEach(button => button.classList.remove('selected'));
+      if (done) applyCalibration();
+    }
+
+    function applyCalibration() {
+      const first = calibrationSamples[0];
+      const second = calibrationSamples[1];
+      const scaleX = (second.imagePoint.x - first.imagePoint.x) / (second.expected.x - first.expected.x);
+      const scaleY = (second.imagePoint.y - first.imagePoint.y) / (second.expected.y - first.expected.y);
+      const offsetX = first.imagePoint.x - first.expected.x * scaleX;
+      const offsetY = first.imagePoint.y - first.expected.y * scaleY;
+      if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || Math.abs(scaleX) < .5 || Math.abs(scaleY) < .5 || Math.abs(scaleX) > 1.5 || Math.abs(scaleY) > 1.5) {
+        calibrationStatus.textContent = 'Those taps were too close to the wrong places. Please try both again.';
+        calibrationSamples.length = 0;
+        return;
+      }
+      localStorage.setItem(CALIBRATION_KEY, JSON.stringify({ scaleX, scaleY, offsetX, offsetY }));
+      calibrationClear.classList.remove('hidden');
+      calibrationStatus.textContent = 'Calibration saved on this device. Reopen the normal radar app to check your location dot.';
+      positionLocationMarker();
     }
 
     radar.addEventListener('load', positionLocationMarker);
@@ -280,8 +385,22 @@
     document.querySelector('#next').addEventListener('click', () => { stop(); show(current + 1); });
     playButton.addEventListener('click', togglePlay);
     document.querySelector('#refresh').addEventListener('click', loadFrames);
+    document.querySelectorAll('[data-landmark]').forEach(button => button.addEventListener('click', () => selectCalibrationTarget(button.dataset.landmark)));
+    calibrationClear.addEventListener('click', () => {
+      localStorage.removeItem(CALIBRATION_KEY);
+      calibrationClear.classList.add('hidden');
+      calibrationSamples.length = 0;
+      calibrationStatus.textContent = 'Saved calibration cleared.';
+      positionLocationMarker();
+    });
     document.addEventListener('gesturestart', event => event.preventDefault());
     setMapTransform();
+    if (calibrationMode) {
+      calibrationPanel.classList.remove('hidden');
+      calibrationClear.classList.toggle('hidden', !readCalibration());
+      zoom = MIN_ZOOM;
+      setMapTransform();
+    }
     loadFrames();
   </script>
 </body>
