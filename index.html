@@ -31,10 +31,10 @@
     #calibration-status { margin-top: 9px; color: #9bd5ff; font-size: 12px; line-height: 1.3; }
     #calibration-values { margin-top: 6px; color: #f5f9ff; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.35; white-space: pre-line; }
     #calibration-clear { margin-top: 8px; min-height: 32px; padding: 4px 10px; background: #304861; font-size: 12px; }
-    #calibration-marker { position: absolute; z-index: 2; width: 22px; height: 22px; transform: translate(-50%, -50%); border: 3px solid #ffd34d; border-radius: 50%; box-shadow: 0 0 0 2px #000a, 0 0 10px #ffd34daa; pointer-events: none; }
+    #calibration-marker { position: absolute; z-index: 2; width: 20px; height: 20px; transform: translate(-50%, -50%) scale(var(--marker-scale, 1)); border: 2px solid #ffd34d; border-radius: 50%; box-shadow: 0 0 0 2px #000a, 0 0 8px #ffd34daa; pointer-events: none; }
     #calibration-marker::before, #calibration-marker::after { content: ""; position: absolute; top: 50%; left: 50%; background: #ffd34d; transform: translate(-50%, -50%); }
-    #calibration-marker::before { width: 3px; height: 34px; }
-    #calibration-marker::after { width: 34px; height: 3px; }
+    #calibration-marker::before { width: 2px; height: 24px; }
+    #calibration-marker::after { width: 24px; height: 2px; }
     footer { z-index: 2; padding: 12px 16px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(transparent, #08111d 28%); }
     #timeline { position: relative; height: 64px; margin: 0 14px 10px; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; }
     #timeline::before, #timeline-fill { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 10px; transform: translateY(-50%); border-radius: 999px; }
@@ -111,8 +111,8 @@
     const calibrationSamples = [];
 
     const MAP_BOUNDS = { west: 13.5, east: 25.5, north: 50.5, south: 44.004 };
-    const VIEWER_IMAGE_X_CORRECTION = 0.015;
     const CALIBRATION_KEY = 'radar-map-calibration-v1';
+    const DEFAULT_CALIBRATION = { scaleX: 0.79542, offsetX: 0.10877, scaleY: 0.92955, offsetY: 0.04821 };
     // Points chosen on distinct, easily recognised ends of the two water bodies.
     const LANDMARKS = {
       balaton: { name: 'the west end of Lake Balaton', latitude: 46.705, longitude: 17.255 },
@@ -220,8 +220,10 @@
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (calibrationTarget && calibrationCapture && pointers.size === 1) {
         calibrationTap = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+        beginSinglePointer();
         return;
       }
+      if (pointers.size === 2) calibrationTap = null;
       if (pointers.size === 1) beginSinglePointer();
       if (pointers.size === 2) {
         pinchStart = { distance: pointerDistance(), zoom, panX, panY };
@@ -233,6 +235,7 @@
       if (!pointers.has(event.pointerId)) return;
       event.preventDefault();
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (calibrationTap && calibrationTap.pointerId === event.pointerId && Math.hypot(event.clientX - calibrationTap.x, event.clientY - calibrationTap.y) >= 12) calibrationTap = null;
       if (pointers.size === 2 && pinchStart) {
         zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pinchStart.zoom * pointerDistance() / pinchStart.distance));
         if (zoom === MIN_ZOOM) { panX = 0; panY = 0; }
@@ -289,9 +292,9 @@
     function positionLocationMarker() {
       if (!currentLocation || !radar.naturalWidth) return;
       const base = normalisedPosition(currentLocation.latitude, currentLocation.longitude);
-      const saved = readCalibration();
-      const x = saved ? base.x * saved.scaleX + saved.offsetX : base.x + VIEWER_IMAGE_X_CORRECTION;
-      const y = saved ? base.y * saved.scaleY + saved.offsetY : base.y;
+      const calibration = readCalibration() || DEFAULT_CALIBRATION;
+      const x = base.x * calibration.scaleX + calibration.offsetX;
+      const y = base.y * calibration.scaleY + calibration.offsetY;
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
       const stageRect = stage.getBoundingClientRect();
       const imageAspect = radar.naturalWidth / radar.naturalHeight;
@@ -329,6 +332,7 @@
       const height = stageAspect > imageAspect ? stageRect.height : stageRect.width / imageAspect;
       calibrationMarker.style.left = `${(stageRect.width - width) / 2 + imagePoint.x * width}px`;
       calibrationMarker.style.top = `${(stageRect.height - height) / 2 + imagePoint.y * height}px`;
+      calibrationMarker.style.setProperty('--marker-scale', width / radar.naturalWidth);
       calibrationMarker.classList.remove('hidden');
     }
 
@@ -342,6 +346,7 @@
       calibrationTarget = null;
       calibrationCapture = false;
       calibrationTap = null;
+      calibrationMarker.classList.add('hidden');
       document.querySelectorAll('[data-landmark]').forEach(button => {
         button.classList.remove('selected');
         button.textContent = button.dataset.landmark === 'balaton' ? '1. West end of Lake Balaton' : '2. North end of Tisza-tó';
@@ -349,16 +354,10 @@
     }
 
     function selectCalibrationTarget(key) {
-      if (calibrationTarget === key) {
-        calibrationCapture = true;
-        calibrationStatus.textContent = `Now tap ${LANDMARKS[key].name}.`;
-        document.querySelector(`[data-landmark="${key}"]`).textContent = 'Now tap the map';
-        return;
-      }
       calibrationTarget = key;
-      calibrationCapture = false;
+      calibrationCapture = true;
       calibrationTap = null;
-      calibrationStatus.textContent = `Zoom and pan to ${LANDMARKS[key].name}, then tap this blue button again to arm the map tap.`;
+      calibrationStatus.textContent = `Pan or zoom to ${LANDMARKS[key].name}, then tap it. You can tap again to replace the point.`;
       document.querySelectorAll('[data-landmark]').forEach(button => {
         button.classList.toggle('selected', button.dataset.landmark === key);
         button.textContent = button.dataset.landmark === 'balaton' ? '1. West end of Lake Balaton' : '2. North end of Tisza-tó';
@@ -378,14 +377,8 @@
       if (existingIndex >= 0) calibrationSamples[existingIndex] = sample;
       else calibrationSamples.push(sample);
       showCalibrationMarker(imagePoint);
-      calibrationTarget = null;
-      calibrationCapture = false;
       const done = calibrationSamples.length === 2;
-      calibrationStatus.textContent = done ? 'Both points captured — calculating…' : 'First point saved. Select it again to replace the tap, or select the other landmark.';
-      document.querySelectorAll('[data-landmark]').forEach(button => {
-        button.classList.remove('selected');
-        button.textContent = button.dataset.landmark === 'balaton' ? '1. West end of Lake Balaton' : '2. North end of Tisza-tó';
-      });
+      calibrationStatus.textContent = done ? 'Both points captured — calculating…' : 'First point saved. Tap again to replace it, or choose the other landmark.';
       if (done) applyCalibration();
     }
 
@@ -443,6 +436,7 @@
       calibrationClear.classList.toggle('hidden', !readCalibration());
       calibrationStatus.textContent = 'Choose the first landmark to begin.';
       displayCalibration(readCalibration());
+      calibrationSamples.length = 0;
       calibrationTarget = null;
       calibrationCapture = false;
     });
