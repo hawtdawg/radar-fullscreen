@@ -15,8 +15,8 @@
     main { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
     header { z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; background: linear-gradient(#08111d 75%, transparent); }
     h1 { margin: 0; font-size: 18px; font-weight: 700; }
-    #time { color: #c7d7e8; font-size: 13px; text-align: right; white-space: nowrap; }
-    #time .clock { margin-left: 6px; color: #f5f9ff; font-size: 21px; font-weight: 800; }
+    #time { display: flex; align-items: baseline; color: #c7d7e8; font-size: 13px; text-align: right; white-space: nowrap; }
+    #time .clock { width: 5ch; margin-left: 6px; color: #f5f9ff; font-size: 21px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: left; }
     #stage { min-height: 0; display: grid; place-items: center; position: relative; overflow: hidden; touch-action: none; }
     #map-layer { position: absolute; inset: 0; transform: translate3d(var(--pan-x, 0px), var(--pan-y, 0px), 0) scale(var(--zoom, 1)); transform-origin: center; will-change: transform; }
     #radar { display: block; width: 100%; height: 100%; object-fit: contain; }
@@ -28,8 +28,8 @@
     #timeline::before { background: #47627d; }
     #timeline-fill { right: auto; width: var(--progress, 0%); background: #3ca7ff; }
     #timeline-thumb { position: absolute; top: 50%; left: var(--progress, 0%); width: 30px; height: 30px; transform: translate(-50%, -50%); border: 3px solid #eaf5ff; border-radius: 50%; background: #0d6ebd; box-shadow: 0 2px 7px #0008; }
-    #location-marker { position: absolute; z-index: 1; width: 20px; height: 20px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: #1687ff; box-shadow: 0 0 0 5px #1687ff66, 0 2px 8px #0008; pointer-events: none; }
-    #location-marker::after { content: ""; position: absolute; inset: -11px; border: 2px solid #77bdff; border-radius: 50%; animation: location-pulse 1.8s ease-out infinite; }
+    #location-marker { position: absolute; z-index: 1; width: 10px; height: 10px; transform: translate(-50%, -50%) scale(var(--marker-scale, 1)); border: 1px solid white; border-radius: 50%; background: #1687ff; box-shadow: 0 0 0 2px #1687ff66, 0 1px 4px #0008; pointer-events: none; }
+    #location-marker::after { content: ""; position: absolute; inset: -6px; border: 1px solid #77bdff; border-radius: 50%; animation: location-pulse 1.8s ease-out infinite; }
     @keyframes location-pulse { from { transform: scale(.35); opacity: 1; } to { transform: scale(1); opacity: 0; } }
     .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
     button { min-height: 48px; border: 0; border-radius: 12px; color: #f8fbff; background: #1c334d; font: inherit; font-size: 16px; font-weight: 650; touch-action: manipulation; }
@@ -88,6 +88,7 @@
     let currentLocation = null;
 
     const MAP_BOUNDS = { west: 8.5, east: 28.5, north: 52, south: 42 };
+    const LOCATION_X_OFFSET = -0.065;
 
     function filename(date) {
       const yyyy = date.getUTCFullYear();
@@ -237,7 +238,7 @@
 
     function positionLocationMarker() {
       if (!currentLocation || !radar.naturalWidth) return;
-      const x = (currentLocation.longitude - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west);
+      const x = (currentLocation.longitude - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west) + LOCATION_X_OFFSET;
       const y = (MAP_BOUNDS.north - currentLocation.latitude) / (MAP_BOUNDS.north - MAP_BOUNDS.south);
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
       const stageRect = stage.getBoundingClientRect();
@@ -247,6 +248,7 @@
       const height = stageAspect > imageAspect ? stageRect.height : stageRect.width / imageAspect;
       locationMarker.style.left = `${(stageRect.width - width) / 2 + x * width}px`;
       locationMarker.style.top = `${(stageRect.height - height) / 2 + y * height}px`;
+      locationMarker.style.setProperty('--marker-scale', width / radar.naturalWidth);
       locationMarker.classList.remove('hidden');
     }
 
