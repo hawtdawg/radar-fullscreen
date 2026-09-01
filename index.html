@@ -15,19 +15,26 @@
     main { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
     header { z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; background: linear-gradient(#08111d 75%, transparent); }
     h1 { margin: 0; font-size: 18px; font-weight: 700; }
-    #time { color: #c7d7e8; font-size: 13px; text-align: right; }
+    #time { color: #c7d7e8; font-size: 13px; text-align: right; white-space: nowrap; }
+    #time .clock { margin-left: 6px; color: #f5f9ff; font-size: 21px; font-weight: 800; }
     #stage { min-height: 0; display: grid; place-items: center; position: relative; overflow: hidden; touch-action: none; }
-    #radar { display: block; width: 100%; height: 100%; object-fit: contain; transform: translate3d(var(--pan-x, 0px), var(--pan-y, 0px), 0) scale(var(--zoom, 1)); transform-origin: center; will-change: transform; }
+    #map-layer { position: absolute; inset: 0; transform: translate3d(var(--pan-x, 0px), var(--pan-y, 0px), 0) scale(var(--zoom, 1)); transform-origin: center; will-change: transform; }
+    #radar { display: block; width: 100%; height: 100%; object-fit: contain; }
     #message { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; text-align: center; color: #c7d7e8; line-height: 1.45; }
     .hidden { display: none !important; }
     footer { z-index: 2; padding: 12px 16px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(transparent, #08111d 28%); }
-    #scrubber { display: block; width: calc(100% - 28px); height: 58px; margin: 0 14px 10px; accent-color: #3ca7ff; touch-action: pan-x; }
+    #timeline { position: relative; height: 64px; margin: 0 14px 10px; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; }
+    #timeline::before, #timeline-fill { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 10px; transform: translateY(-50%); border-radius: 999px; }
+    #timeline::before { background: #47627d; }
+    #timeline-fill { right: auto; width: var(--progress, 0%); background: #3ca7ff; }
+    #timeline-thumb { position: absolute; top: 50%; left: var(--progress, 0%); width: 30px; height: 30px; transform: translate(-50%, -50%); border: 3px solid #eaf5ff; border-radius: 50%; background: #0d6ebd; box-shadow: 0 2px 7px #0008; }
+    #location-marker { position: absolute; z-index: 1; width: 20px; height: 20px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: #1687ff; box-shadow: 0 0 0 5px #1687ff66, 0 2px 8px #0008; pointer-events: none; }
+    #location-marker::after { content: ""; position: absolute; inset: -11px; border: 2px solid #77bdff; border-radius: 50%; animation: location-pulse 1.8s ease-out infinite; }
+    @keyframes location-pulse { from { transform: scale(.35); opacity: 1; } to { transform: scale(1); opacity: 0; } }
     .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
     button { min-height: 48px; border: 0; border-radius: 12px; color: #f8fbff; background: #1c334d; font: inherit; font-size: 16px; font-weight: 650; touch-action: manipulation; }
     button:active { background: #2d5680; transform: scale(.98); }
     #refresh { background: #0d6ebd; }
-    #reset { min-height: 38px; padding: 0 12px; border-radius: 10px; background: #1c334d; font-size: 14px; }
-    #reset:disabled { opacity: .42; }
     @media (orientation: landscape) {
       main { grid-template-columns: minmax(140px, 22vw) 1fr; grid-template-rows: 1fr; }
       header { grid-column: 1; grid-row: 1; align-items: flex-start; flex-direction: column; justify-content: flex-start; background: #08111d; }
@@ -35,16 +42,16 @@
       #stage { grid-column: 2; grid-row: 1; }
       footer { grid-column: 1; grid-row: 1; align-self: end; padding-top: 0; background: #08111d; }
       .controls { grid-template-columns: repeat(2, 1fr); }
-      #scrubber { height: 62px; }
+      #timeline { height: 72px; }
     }
   </style>
 </head>
 <body>
   <main>
-    <header><h1>Hungary radar</h1><div id="time">Loading radar…</div><button id="reset" disabled>Reset map</button></header>
-    <section id="stage"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="message">Finding the newest HungaroMet radar image…</div></section>
+    <header><h1>Hungary radar</h1><div id="time">Loading radar…</div></header>
+    <section id="stage"><div id="map-layer"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="location-marker" class="hidden" aria-label="Your location"></div></div><div id="message">Finding the newest HungaroMet radar image…</div></section>
     <footer>
-      <input id="scrubber" type="range" min="0" max="0" value="0" aria-label="Radar time">
+      <div id="timeline" role="slider" aria-label="Radar time" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" tabindex="0"><div id="timeline-fill"></div><div id="timeline-thumb"></div></div>
       <div class="controls">
         <button id="back" aria-label="Previous radar frame">‹</button>
         <button id="play" aria-label="Play radar animation">Play</button>
@@ -60,10 +67,11 @@
     const radar = document.querySelector('#radar');
     const time = document.querySelector('#time');
     const message = document.querySelector('#message');
-    const scrubber = document.querySelector('#scrubber');
+    const timeline = document.querySelector('#timeline');
+    const mapLayer = document.querySelector('#map-layer');
+    const locationMarker = document.querySelector('#location-marker');
     const playButton = document.querySelector('#play');
     const stage = document.querySelector('#stage');
-    const resetButton = document.querySelector('#reset');
     let frames = [];
     let current = 0;
     let timer = null;
@@ -76,6 +84,10 @@
     const pointers = new Map();
     let dragStart = null;
     let pinchStart = null;
+    let timelinePointer = null;
+    let location = null;
+
+    const MAP_BOUNDS = { west: 8.5, east: 28.5, north: 52, south: 42 };
 
     function filename(date) {
       const yyyy = date.getUTCFullYear();
@@ -88,6 +100,12 @@
 
     function label(date) {
       return new Intl.DateTimeFormat('hu-HU', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Budapest' }).format(date);
+    }
+
+    function renderTime(date) {
+      const datePart = new Intl.DateTimeFormat('hu-HU', { dateStyle: 'medium', timeZone: 'Europe/Budapest' }).format(date);
+      const timePart = new Intl.DateTimeFormat('hu-HU', { timeStyle: 'short', timeZone: 'Europe/Budapest' }).format(date);
+      return `<span>${datePart}</span><span class="clock">${timePart}</span>`;
     }
 
     function frameUrl(date) { return BASE + filename(date); }
@@ -117,7 +135,6 @@
         return;
       }
       current = 0;
-      scrubber.max = String(frames.length - 1);
       show(current);
       radar.classList.remove('hidden');
       message.classList.add('hidden');
@@ -129,22 +146,18 @@
       current = Math.max(0, Math.min(frames.length - 1, index));
       radar.src = frames[current].url;
       radar.alt = `Hungary precipitation radar, ${label(frames[current].date)}`;
-      time.textContent = label(frames[current].date);
-      scrubber.value = String(current);
+      time.innerHTML = renderTime(frames[current].date);
+      const progress = frames.length > 1 ? current / (frames.length - 1) : 0;
+      timeline.style.setProperty('--progress', `${progress * 100}%`);
+      timeline.setAttribute('aria-valuemax', String(Math.max(0, frames.length - 1)));
+      timeline.setAttribute('aria-valuenow', String(current));
+      timeline.setAttribute('aria-valuetext', label(frames[current].date));
     }
 
     function setMapTransform() {
-      radar.style.setProperty('--zoom', zoom);
-      radar.style.setProperty('--pan-x', `${panX}px`);
-      radar.style.setProperty('--pan-y', `${panY}px`);
-      resetButton.disabled = zoom === 1 && panX === 0 && panY === 0;
-    }
-
-    function resetMap() {
-      zoom = MIN_ZOOM;
-      panX = 0;
-      panY = 0;
-      setMapTransform();
+      mapLayer.style.setProperty('--zoom', zoom);
+      mapLayer.style.setProperty('--pan-x', `${panX}px`);
+      mapLayer.style.setProperty('--pan-y', `${panY}px`);
     }
 
     function pointerDistance() {
@@ -194,6 +207,58 @@
     stage.addEventListener('pointerup', endPointer);
     stage.addEventListener('pointercancel', endPointer);
 
+    function setTimelineFromPoint(clientX) {
+      if (!frames.length) return;
+      const rect = timeline.getBoundingClientRect();
+      const progress = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      stop();
+      show(Math.round(progress * (frames.length - 1)));
+    }
+    timeline.addEventListener('pointerdown', event => {
+      event.preventDefault();
+      timelinePointer = event.pointerId;
+      timeline.setPointerCapture(event.pointerId);
+      setTimelineFromPoint(event.clientX);
+    });
+    timeline.addEventListener('pointermove', event => {
+      if (event.pointerId !== timelinePointer) return;
+      event.preventDefault();
+      setTimelineFromPoint(event.clientX);
+    });
+    timeline.addEventListener('pointerup', event => { if (event.pointerId === timelinePointer) timelinePointer = null; });
+    timeline.addEventListener('pointercancel', () => { timelinePointer = null; });
+    timeline.addEventListener('keydown', event => {
+      if (!frames.length) return;
+      if (event.key === 'ArrowLeft') { event.preventDefault(); stop(); show(current - 1); }
+      if (event.key === 'ArrowRight') { event.preventDefault(); stop(); show(current + 1); }
+      if (event.key === 'Home') { event.preventDefault(); stop(); show(0); }
+      if (event.key === 'End') { event.preventDefault(); stop(); show(frames.length - 1); }
+    });
+
+    function positionLocationMarker() {
+      if (!location || !radar.naturalWidth) return;
+      const x = (location.longitude - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west);
+      const y = (MAP_BOUNDS.north - location.latitude) / (MAP_BOUNDS.north - MAP_BOUNDS.south);
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      const stageRect = stage.getBoundingClientRect();
+      const imageAspect = radar.naturalWidth / radar.naturalHeight;
+      const stageAspect = stageRect.width / stageRect.height;
+      const width = stageAspect > imageAspect ? stageRect.height * imageAspect : stageRect.width;
+      const height = stageAspect > imageAspect ? stageRect.height : stageRect.width / imageAspect;
+      locationMarker.style.left = `${(stageRect.width - width) / 2 + x * width}px`;
+      locationMarker.style.top = `${(stageRect.height - height) / 2 + y * height}px`;
+      locationMarker.classList.remove('hidden');
+    }
+
+    radar.addEventListener('load', positionLocationMarker);
+    window.addEventListener('resize', positionLocationMarker);
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(position => {
+        location = position.coords;
+        positionLocationMarker();
+      }, () => {}, { enableHighAccuracy: false, maximumAge: 60000, timeout: 10000 });
+    }
+
     function stop() {
       if (timer) clearInterval(timer);
       timer = null;
@@ -209,12 +274,10 @@
       playButton.setAttribute('aria-label', 'Pause radar animation');
     }
 
-    scrubber.addEventListener('input', () => { stop(); show(Number(scrubber.value)); });
     document.querySelector('#back').addEventListener('click', () => { stop(); show(current - 1); });
     document.querySelector('#next').addEventListener('click', () => { stop(); show(current + 1); });
     playButton.addEventListener('click', togglePlay);
     document.querySelector('#refresh').addEventListener('click', loadFrames);
-    resetButton.addEventListener('click', resetMap);
     document.addEventListener('gesturestart', event => event.preventDefault());
     setMapTransform();
     loadFrames();
