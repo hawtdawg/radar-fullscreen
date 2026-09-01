@@ -96,6 +96,7 @@
     let frames = [];
     let current = 0;
     let timer = null;
+    let refreshTimer = null;
     const MIN_ZOOM = 1;
     const MAX_ZOOM = 4;
     const DEFAULT_ZOOM = (MIN_ZOOM + MAX_ZOOM) / 2;
@@ -203,6 +204,22 @@
       mapLayer.style.setProperty('--pan-y', `${panY}px`);
     }
 
+    function constrainPan() {
+      const stageRect = stage.getBoundingClientRect();
+      if (!stageRect.width || !stageRect.height) return;
+      const imageAspect = radar.naturalWidth && radar.naturalHeight ? radar.naturalWidth / radar.naturalHeight : 1;
+      const stageAspect = stageRect.width / stageRect.height;
+      const width = stageAspect > imageAspect ? stageRect.height * imageAspect : stageRect.width;
+      const height = stageAspect > imageAspect ? stageRect.height : stageRect.width / imageAspect;
+      const left = (stageRect.width - width) / 2;
+      const top = (stageRect.height - height) / 2;
+      const centreX = stageRect.width / 2;
+      const centreY = stageRect.height / 2;
+      // An image edge may reach the display centre, but cannot move beyond it.
+      panX = Math.max(-zoom * (left + width - centreX), Math.min(zoom * (centreX - left), panX));
+      panY = Math.max(-zoom * (top + height - centreY), Math.min(zoom * (centreY - top), panY));
+    }
+
     function pointerDistance() {
       const [first, second] = [...pointers.values()];
       return Math.hypot(first.x - second.x, first.y - second.y);
@@ -241,11 +258,13 @@
       if (pointers.size === 2 && pinchStart) {
         zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pinchStart.zoom * pointerDistance() / pinchStart.distance));
         if (zoom === MIN_ZOOM) { panX = 0; panY = 0; }
+        constrainPan();
         setMapTransform();
       } else if (pointers.size === 1 && dragStart && zoom > 1) {
         const point = pointers.values().next().value;
         panX = dragStart.panX + point.x - dragStart.x;
         panY = dragStart.panY + point.y - dragStart.y;
+        constrainPan();
         setMapTransform();
       }
     });
@@ -404,7 +423,7 @@
     }
 
     radar.addEventListener('load', positionLocationMarker);
-    window.addEventListener('resize', positionLocationMarker);
+    window.addEventListener('resize', () => { constrainPan(); setMapTransform(); positionLocationMarker(); });
     if (navigator.geolocation) {
       navigator.geolocation.watchPosition(position => {
         currentLocation = position.coords;
@@ -425,6 +444,15 @@
       timer = setInterval(() => show((current + 1) % frames.length), 250);
       playButton.textContent = 'Pause';
       playButton.setAttribute('aria-label', 'Pause radar animation');
+    }
+
+    function scheduleAutoRefresh() {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      const nextUpdate = (Math.floor(Date.now() / STEP) + 1) * STEP + 15000;
+      refreshTimer = setTimeout(async () => {
+        await loadFrames();
+        scheduleAutoRefresh();
+      }, Math.max(1000, nextUpdate - Date.now()));
     }
 
     document.querySelector('#back').addEventListener('click', () => { stop(); show(current - 1); });
@@ -451,9 +479,13 @@
       positionLocationMarker();
     });
     calibrationClose.addEventListener('click', closeCalibration);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) loadFrames();
+    });
     document.addEventListener('gesturestart', event => event.preventDefault());
     setMapTransform();
     loadFrames();
+    scheduleAutoRefresh();
   </script>
 </body>
 </html>
