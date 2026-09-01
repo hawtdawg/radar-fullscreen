@@ -39,7 +39,7 @@
     #location-marker { position: absolute; z-index: 1; width: 20px; height: 20px; transform: translate(-50%, -50%) scale(var(--marker-scale, 1)); border: 2px solid white; border-radius: 50%; background: #1687ff; box-shadow: 0 0 0 6px #1687ffbb, 0 2px 8px #0008; pointer-events: none; }
     #location-marker::after { content: ""; position: absolute; inset: -22px; border: 4px solid #9bd5ff; border-radius: 50%; animation: location-pulse 1.8s ease-out infinite; }
     @keyframes location-pulse { from { transform: scale(.35); opacity: 1; } to { transform: scale(1); opacity: 0; } }
-    .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
+    .controls { display: grid; grid-template-columns: repeat(5, 1fr); gap: 9px; }
     button { min-height: 48px; border: 0; border-radius: 12px; color: #f8fbff; background: #1c334d; font: inherit; font-size: 16px; font-weight: 650; touch-action: manipulation; }
     button:active { background: #2d5680; transform: scale(.98); }
     #refresh { background: #0d6ebd; }
@@ -57,7 +57,7 @@
 <body>
   <main>
     <header><h1>Hungary radar</h1><div id="time">Loading radar…</div></header>
-    <section id="stage"><div id="map-layer"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="location-marker" class="hidden" aria-label="Your location"></div></div><div id="message">Finding the newest HungaroMet radar image…</div><aside id="calibration" class="hidden" aria-live="polite"><strong>Map-position check</strong><p>Select a landmark, then tap its exact visible point. The map is temporarily shown fully zoomed out.</p><div id="calibration-actions"><button data-landmark="balaton">1. West end of Lake Balaton</button><button data-landmark="tisza">2. North end of Tisza-tó</button></div><div id="calibration-status">Choose the first landmark to begin.</div><button id="calibration-clear" class="hidden">Clear saved calibration</button></aside></section>
+    <section id="stage"><div id="map-layer"><img id="radar" class="hidden" alt="Hungary precipitation radar"><div id="location-marker" class="hidden" aria-label="Your location"></div></div><div id="message">Finding the newest HungaroMet radar image…</div><aside id="calibration" class="hidden" aria-live="polite"><strong>Map-position check</strong><p>Choose a landmark, zoom and pan to it, then arm a precise map tap.</p><div id="calibration-actions"><button data-landmark="balaton">1. West end of Lake Balaton</button><button data-landmark="tisza">2. North end of Tisza-tó</button></div><div id="calibration-status">Choose the first landmark to begin.</div><button id="calibration-clear" class="hidden">Clear saved calibration</button></aside></section>
     <footer>
       <div id="timeline" role="slider" aria-label="Radar time" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" tabindex="0"><div id="timeline-fill"></div><div id="timeline-thumb"></div></div>
       <div class="controls">
@@ -65,6 +65,7 @@
         <button id="play" aria-label="Play radar animation">Play</button>
         <button id="next" aria-label="Next radar frame">›</button>
         <button id="refresh">Refresh</button>
+        <button id="calibrate">Calibration</button>
       </div>
     </footer>
   </main>
@@ -98,6 +99,7 @@
     let timelinePointer = null;
     let currentLocation = null;
     let calibrationTarget = null;
+    let calibrationCapture = false;
     let calibrationTap = null;
     const calibrationSamples = [];
     const calibrationMode = new URLSearchParams(location.search).has('calibrate');
@@ -209,7 +211,7 @@
       event.preventDefault();
       stage.setPointerCapture(event.pointerId);
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-      if (calibrationTarget && pointers.size === 1) {
+      if (calibrationTarget && calibrationCapture && pointers.size === 1) {
         calibrationTap = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
         return;
       }
@@ -304,20 +306,28 @@
       const height = stageAspect > imageAspect ? stageRect.height : stageRect.width / imageAspect;
       const left = stageRect.left + (stageRect.width - width) / 2;
       const top = stageRect.top + (stageRect.height - height) / 2;
-      const x = (clientX - left) / width;
-      const y = (clientY - top) / height;
+      const baseX = stageRect.width / 2 + (clientX - stageRect.left - stageRect.width / 2 - panX) / zoom;
+      const baseY = stageRect.height / 2 + (clientY - stageRect.top - stageRect.height / 2 - panY) / zoom;
+      const x = (baseX - (stageRect.width - width) / 2) / width;
+      const y = (baseY - (stageRect.height - height) / 2) / height;
       return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
     }
 
     function selectCalibrationTarget(key) {
+      if (calibrationTarget === key) {
+        calibrationCapture = true;
+        calibrationStatus.textContent = `Now tap ${LANDMARKS[key].name}.`;
+        document.querySelector(`[data-landmark="${key}"]`).textContent = 'Now tap the map';
+        return;
+      }
       calibrationTarget = key;
+      calibrationCapture = false;
       calibrationTap = null;
-      zoom = MIN_ZOOM;
-      panX = 0;
-      panY = 0;
-      setMapTransform();
-      calibrationStatus.textContent = `Now tap ${LANDMARKS[key].name}.`;
-      document.querySelectorAll('[data-landmark]').forEach(button => button.classList.toggle('selected', button.dataset.landmark === key));
+      calibrationStatus.textContent = `Zoom and pan to ${LANDMARKS[key].name}, then tap this blue button again to arm the map tap.`;
+      document.querySelectorAll('[data-landmark]').forEach(button => {
+        button.classList.toggle('selected', button.dataset.landmark === key);
+        button.textContent = button.dataset.landmark === 'balaton' ? '1. West end of Lake Balaton' : '2. North end of Tisza-tó';
+      });
     }
 
     function recordCalibrationTap(clientX, clientY) {
@@ -333,9 +343,13 @@
       if (existingIndex >= 0) calibrationSamples[existingIndex] = sample;
       else calibrationSamples.push(sample);
       calibrationTarget = null;
+      calibrationCapture = false;
       const done = calibrationSamples.length === 2;
       calibrationStatus.textContent = done ? 'Both points captured — calculating…' : 'First point saved. Now select the other landmark.';
-      document.querySelectorAll('[data-landmark]').forEach(button => button.classList.remove('selected'));
+      document.querySelectorAll('[data-landmark]').forEach(button => {
+        button.classList.remove('selected');
+        button.textContent = button.dataset.landmark === 'balaton' ? '1. West end of Lake Balaton' : '2. North end of Tisza-tó';
+      });
       if (done) applyCalibration();
     }
 
@@ -385,6 +399,13 @@
     document.querySelector('#next').addEventListener('click', () => { stop(); show(current + 1); });
     playButton.addEventListener('click', togglePlay);
     document.querySelector('#refresh').addEventListener('click', loadFrames);
+    document.querySelector('#calibrate').addEventListener('click', () => {
+      calibrationPanel.classList.remove('hidden');
+      calibrationClear.classList.toggle('hidden', !readCalibration());
+      calibrationStatus.textContent = 'Choose the first landmark to begin.';
+      calibrationTarget = null;
+      calibrationCapture = false;
+    });
     document.querySelectorAll('[data-landmark]').forEach(button => button.addEventListener('click', () => selectCalibrationTarget(button.dataset.landmark)));
     calibrationClear.addEventListener('click', () => {
       localStorage.removeItem(CALIBRATION_KEY);
@@ -398,8 +419,6 @@
     if (calibrationMode) {
       calibrationPanel.classList.remove('hidden');
       calibrationClear.classList.toggle('hidden', !readCalibration());
-      zoom = MIN_ZOOM;
-      setMapTransform();
     }
     loadFrames();
   </script>
