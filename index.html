@@ -11,7 +11,7 @@
     :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; background: #08111d; }
-    body { touch-action: none; -webkit-user-select: none; user-select: none; }
+    body { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
     main { position: fixed; inset: 0; display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
     header { z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(12px, env(safe-area-inset-top)) 16px 12px; background: linear-gradient(#08111d 75%, transparent); }
     h1 { margin: 0; font-size: 18px; font-weight: 700; }
@@ -21,7 +21,7 @@
     #message { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; text-align: center; color: #c7d7e8; line-height: 1.45; }
     .hidden { display: none !important; }
     footer { z-index: 2; padding: 12px 16px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(transparent, #08111d 28%); }
-    #scrubber { width: 100%; height: 42px; margin: 0 0 10px; accent-color: #3ca7ff; touch-action: pan-x; }
+    #scrubber { display: block; width: calc(100% - 28px); height: 58px; margin: 0 14px 10px; accent-color: #3ca7ff; touch-action: pan-x; }
     .controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
     button { min-height: 48px; border: 0; border-radius: 12px; color: #f8fbff; background: #1c334d; font: inherit; font-size: 16px; font-weight: 650; touch-action: manipulation; }
     button:active { background: #2d5680; transform: scale(.98); }
@@ -35,7 +35,7 @@
       #stage { grid-column: 2; grid-row: 1; }
       footer { grid-column: 1; grid-row: 1; align-self: end; padding-top: 0; background: #08111d; }
       .controls { grid-template-columns: repeat(2, 1fr); }
-      #scrubber { height: 54px; }
+      #scrubber { height: 62px; }
     }
   </style>
 </head>
@@ -67,7 +67,10 @@
     let frames = [];
     let current = 0;
     let timer = null;
-    let zoom = 1;
+    const MIN_ZOOM = 1;
+    const MAX_ZOOM = 4;
+    const DEFAULT_ZOOM = (MIN_ZOOM + MAX_ZOOM) / 2;
+    let zoom = DEFAULT_ZOOM;
     let panX = 0;
     let panY = 0;
     const pointers = new Map();
@@ -113,11 +116,12 @@
         time.textContent = 'Unavailable';
         return;
       }
-      current = frames.length - 1;
+      current = 0;
       scrubber.max = String(frames.length - 1);
       show(current);
       radar.classList.remove('hidden');
       message.classList.add('hidden');
+      togglePlay();
     }
 
     function show(index) {
@@ -137,7 +141,7 @@
     }
 
     function resetMap() {
-      zoom = 1;
+      zoom = MIN_ZOOM;
       panX = 0;
       panY = 0;
       setMapTransform();
@@ -171,8 +175,8 @@
       event.preventDefault();
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (pointers.size === 2 && pinchStart) {
-        zoom = Math.max(1, Math.min(4, pinchStart.zoom * pointerDistance() / pinchStart.distance));
-        if (zoom === 1) { panX = 0; panY = 0; }
+        zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, pinchStart.zoom * pointerDistance() / pinchStart.distance));
+        if (zoom === MIN_ZOOM) { panX = 0; panY = 0; }
         setMapTransform();
       } else if (pointers.size === 1 && dragStart && zoom > 1) {
         const point = pointers.values().next().value;
@@ -200,7 +204,7 @@
     function togglePlay() {
       if (timer) return stop();
       if (!frames.length) return;
-      timer = setInterval(() => show((current + 1) % frames.length), 500);
+      timer = setInterval(() => show((current + 1) % frames.length), 250);
       playButton.textContent = 'Pause';
       playButton.setAttribute('aria-label', 'Pause radar animation');
     }
@@ -212,6 +216,7 @@
     document.querySelector('#refresh').addEventListener('click', loadFrames);
     resetButton.addEventListener('click', resetMap);
     document.addEventListener('gesturestart', event => event.preventDefault());
+    setMapTransform();
     loadFrames();
   </script>
 </body>
