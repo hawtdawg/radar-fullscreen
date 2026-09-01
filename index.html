@@ -85,7 +85,7 @@
     let dragStart = null;
     let pinchStart = null;
     let timelinePointer = null;
-    let location = null;
+    let currentLocation = null;
 
     const MAP_BOUNDS = { west: 8.5, east: 28.5, north: 52, south: 42 };
 
@@ -236,9 +236,9 @@
     });
 
     function positionLocationMarker() {
-      if (!location || !radar.naturalWidth) return;
-      const x = (location.longitude - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west);
-      const y = (MAP_BOUNDS.north - location.latitude) / (MAP_BOUNDS.north - MAP_BOUNDS.south);
+      if (!currentLocation || !radar.naturalWidth) return;
+      const x = (currentLocation.longitude - MAP_BOUNDS.west) / (MAP_BOUNDS.east - MAP_BOUNDS.west);
+      const y = (MAP_BOUNDS.north - currentLocation.latitude) / (MAP_BOUNDS.north - MAP_BOUNDS.south);
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
       const stageRect = stage.getBoundingClientRect();
       const imageAspect = radar.naturalWidth / radar.naturalHeight;
@@ -254,7 +254,7 @@
     window.addEventListener('resize', positionLocationMarker);
     if (navigator.geolocation) {
       navigator.geolocation.watchPosition(position => {
-        location = position.coords;
+        currentLocation = position.coords;
         positionLocationMarker();
       }, () => {}, { enableHighAccuracy: false, maximumAge: 60000, timeout: 10000 });
     }
