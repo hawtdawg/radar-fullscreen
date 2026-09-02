@@ -443,7 +443,7 @@
     function togglePlay() {
       if (timer) return stop();
       if (!frames.length) return;
-      timer = setInterval(() => show((current + 1) % frames.length), 250);
+      timer = setInterval(() => show((current + 1) % frames.length), 1000 / 24);
       playButton.textContent = 'Pause';
       playButton.setAttribute('aria-label', 'Pause radar animation');
     }
